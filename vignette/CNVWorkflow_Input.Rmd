@@ -1,0 +1,263 @@
+---
+title: "CNVWorkflow: Prepare PureCN Inputs"
+author: "Sehyun Oh"
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_depth: 3
+vignette: >
+  % \VignetteIndexEntry{}
+  % \VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+# From PureCN and MuTect
+Start R and enter the following to get the path to the command line scripts:
+```{r message=FALSE, warning=FALSE}
+library(PureCN)
+system.file("extdata", package="PureCN")
+
+## [1] "/path/to/PureCN/extdata"
+```
+
+
+Exit R and store this path in an environment variable, for example in BASH:
+```{bash}
+export PURECN="/path/to/PureCN/extdata"
+```
+
+
+## Interval file
+**Download GRCh38 reference file (without ALT contigs)**
+```{bash}
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz
+```
+
+```{bash}
+Rscript $PURECN/IntervalFile.R \
+    --infile baits_hg38.bed \
+    --fasta hg38.fasta \
+    --outfile $OUT/baits_hg38_intervals.txt \
+    --offtarget --genome hg38 \
+    --mappability GRCh38_no_alt_76.bw \
+    --force
+```
+
+*** 
+## VCF and stats files
+**Provide `-I:normal` only you have matched normal**
+```{bash}
+java -jar mutect.jar \
+    --analysis_type MuTect \
+    -R hg38.fasta \
+    --dbsnp $DBSNP_VCF \
+    --cosmic $COSMIC_VCF \
+# -I:normal $BAM_NORMAL \
+    -I:tumor $BAM_TUMOR  \
+    -o $OUT/${SAMPLEID}_mutect_stats.txt \
+    -vcf $OUT/${SAMPLEID}_mutect.vcf
+```
+
+*** 
+
+## Pool of normals (PoN)
+
+```{bash}
+# Run MuTect on the normal with `-I:tumor $BAM_NORMAL` and `--artifact_detection_mode` flag
+# -artifact_detection_mode flag.
+java -jar mutect.jar \
+   --analysis_type MuTect \
+   -R hg38.fasta \
+   --artifact_detection_mode \
+   --dbsnp $DBSNP_VCF \
+   --cosmic $COSMIC_VCF \
+   -dt None \
+   -I:tumor $BAM_NORMAL  \
+   -o $OUT/${SAMPLEID}_pon_stats.txt \
+   -vcf $OUT/${SAMPLEID}_pon.vcf
+
+# Remove the empty none sample from the VCF
+java -jar GenomeAnalysisTK.jar \
+   --analysis_type SelectVariants \
+   -R hg38.fasta \
+   --exclude_sample_expressions none \
+   -V $OUT/${SAMPLEID}_bwa_mutect_artifact_detection_mode.vcf \
+   -o $OUT/${SAMPLEID}_bwa_mutect_artifact_detection_mode_no_none.vcf 
+
+# Merge the VCFs
+java -jar GenomeAnalysisTK.jar \
+   -T CombineVariants \
+   --minimumN 5 \
+   --genotypemergeoption UNSORTED \
+   --variant $OUT/${SAMPLEID}_bwa_mutect_artifact_detection_mode_no_none.vcf \
+   -o $OUT/normals.merged.min5.vcf
+
+bgzip $OUT/normals.merged.min5.vcf
+tabix $OUT/normals.merged.min5.vcf.gz
+```
+
+*** 
+
+## GC-normalized coverage files
+This process is applied to both tumor and (process-matched) normal bam files, separately. 
+```{bash}
+# normal
+Rscript $PURECN/Coverage.R \
+   --outdir $OUT/normal_cov \
+   --bam $BAM_NORMAL \
+   --intervals $OUT/baits_hg38_intervals.txt
+
+# tumor
+Rscript $PURECN/Coverage.R \
+   --outdir $OUT/tumor_cov \
+   --bam $BAM_TUMOR \
+   --intervals $OUT/baits_hg38_intervals.txt
+```
+
+*** 
+
+## NormalDB
+To build a normal database for coverage normalization, copy the paths to all GC-normalized normal coverage files in a single text file, line-by-line:
+
+```{bash}
+ls -a $OUT/normal_cov/*_coverage_loess.txt | cat > $OUT/normalDB/normalDB.list
+```
+
+**Recommendations:**    
+* Do not mix normal data obtained with different capture kits!   
+* Provide a normal panel VCF here to precompute mapping bias for faster runtimes.
+```{bash}
+Rscript $PURECN/NormalDB.R \
+   --outdir $OUT/normalDB \
+   --coveragefiles $OUT/normalDB/normalDB.list \
+   --normal_panel $OUT/normals.merged.min5.vcf.gz \
+   --genome hg38 --force
+```
+
+
+# From other tools
+## Build your manifest file
+```{r message=FALSE, warning=FALSE}
+library(TCGAutils)
+library(jsonlite)
+library(curl)
+library(downloader)
+library(GenomicDataCommons)
+library(magrittr)
+```
+
+### Download GDC manifest file
+Check the available values for GDCQuery filters
+```{r}
+available_values('files','cases.project.project_id')
+available_values('files','experimental_strategy')
+available_values('files','data_format')
+```
+
+```{r}
+manifest <- GenomicDataCommons::files() %>%
+  GenomicDataCommons::filter(~ cases.project.project_id == "TCGA-LUAD" &
+           experimental_strategy == "WXS" &
+           data_format == "BAM") %>%
+  GenomicDataCommons::manifest()
+```
+
+### Annotate manifest file
+**Translate study identifiers from UUID to barcode**
+```{r}
+manifest <- cbind(manifest, 
+                 UUIDtoBarcode(manifest$id, id_type = "file_id", 
+                               end_point = "center"))
+names(manifest)[7] <- "barcode"
+```
+
+**Extract biospecimen data from the TCGA barcode**
+```{r}
+manifest <- cbind(manifest, TCGAutils::TCGAbiospec(manifest$barcode))
+```
+
+**Gather target_capture_kit information**
+```{r}
+res <- lapply(manifest$id, function(uuid) {
+  con = curl::curl(paste0("https://api.gdc.cancer.gov/files/", uuid, "?pretty=true&fields=analysis.metadata.read_groups.target_capture_kit_target_region,analysis.metadata.read_groups.target_capture_kit_name,analysis.metadata.read_groups.target_capture_kit_vendor,analysis.metadata.read_groups.target_capture_kit_catalog_number"))
+  x = jsonlite::fromJSON(con)
+  return(x)
+})
+
+y <- lapply(res, function(x) unique(x$data$analysis$metadata$read_groups))
+y <- do.call(rbind, y)
+manifest <- cbind(manifest, y)
+```
+
+**Cleaning target_region (BED file) information**    
+```{r}
+# Seperate the name of bedfiles from 'target_capture_kit_target_region'
+bedfiles <- tail(unlist(strsplit(as.character(manifest$target_capture_kit_target_region)[1], split="/", fixed=TRUE)), n = 1)
+manifest$bedfiles <- bedfiles
+```
+
+*** 
+
+## liftOver
+### Download liftOver chain file
+`hg19ToHg38` chain file can be downloaded from here:   
+http://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz
+
+### liftOver your bed file
+```{r}
+# Change chromosome notation from '1, 2, 3, ...' to 'chr1, chr2, chr3, ...
+bed <- "/path/to/your/bedfile"
+
+library(rtracklayer)
+ch <- import.chain("hg19ToHg38.over.chain")
+bed_gr <- import(bed, format = "bed")
+bed_hg38 <- liftOver(bed_gr, ch)
+bed_hg38 <- unlist(bed_hg38)
+
+export.bed(bed_hg38, file.path(data.dir, paste0(BED,"_hg38.bed")))
+```
+
+*** 
+
+## Mappability
+### Pre-processed mappability files
+**GRCh38 reference build**   
+https://s3.amazonaws.com/purecn/GCA_000001405.15_GRCh38_no_alt_analysis_set_76.bw
+https://s3.amazonaws.com/purecn/GCA_000001405.15_GRCh38_no_alt_analysis_set_100.bw
+
+### Build your own mappability file
+**Download GEM library**
+```{bash}
+wget https://sourceforge.net/projects/gemlibrary/files/gem-library/Binary%20pre-release%203/GEM-binaries-Linux-x86_64-core_i3-20130406-045632.tbz2/download
+tar xvf download
+```
+
+```{bash}
+# To calculate mappability, set kmer size to length of mapped reads
+THREADS=24
+KMER=76   # check your BED file
+
+PREF="/path/to/GCA_000001405.15_GRCh38_no_alt_analysis_set"
+REFERENCE="${PREF}.fna"
+
+gem-indexer -T ${THREADS} -i ${REFERENCE} -o ${PREF}_index
+gem-mappability -T ${THREADS} -I ${PREF}_index.gem -l ${KMER} -o ${PREF}_${KMER} -m 2 -e 2
+gem-2-wig -I ${PREF}_index.gem -i ${PREF}_${KMER}.mappability -o ${PREF}_${KMER}
+
+# Convert to bigWig format, for example using the UCSC wigToBigWig tool
+cut -f1,2 ${REFERENCE}.fai > ${PREF}.sizes 
+
+# I found the unexpected letter, "AC" in my .wig file --> remove it
+cp ${PREF}_${KMER}.wig GRCh38_no_alt_${KMER}.wig
+sed -e s/AC//g -i GRCh38_no_alt_${KMER}.wig
+wigToBigWig GRCh38_no_alt_${KMER}.wig ${PREF}.sizes ${PREF}_${KMER}.bw
+```
+

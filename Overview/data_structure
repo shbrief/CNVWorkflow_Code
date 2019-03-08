@@ -1,0 +1,17 @@
+CNVworkflow
+├── mutect_output
+│   ├── normal_panel
+│   ├── stat_matching_normal
+│   └── stat_tumor_only
+│   └── normals.merged.min5.vcf
+└── purecn_output
+├── Dx
+│   ├── callableLoci
+│   ├── matching_normal_cds
+│   └── tumor_only_cds
+├── normal_cov
+├── normalDB
+├── PureCN
+│   ├── matching_normal
+│   └── tumor_only
+└── tumor_cov

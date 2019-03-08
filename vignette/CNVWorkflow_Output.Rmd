@@ -1,0 +1,64 @@
+---
+title: "CNVWorkflow: Analyze PureCN outputs"
+author: "Sehyun Oh"
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_depth: 3
+vignette: >
+  % \VignetteIndexEntry{}
+  % \VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+# Dx.R
+Dx.R extracts copy number and mutation metrics (e.g. **Tumor Mutation Burden (TMB)** and **COSMIC Mutational Signature (mutSig)**) from PureCN.R output
+
+```{bash}
+# Generate a BED file with callable regions
+java -jar GenomeAnalysisTK.jar \
+   -T CallableLoci \
+   -R hg38.fasta \
+   -I:tumor $BAM_TUMOR  \
+   --summary $OUT/${SAMPLEID}_table.txt \
+   -o $OUT/${SAMPLEID}_callable_status.bed \
+   --minDepth 30
+
+# BED file with callable regions
+grep CALLABLE $OUT/${SAMPLEID}_callable_status.bed > \
+   $OUT/${SAMPLEID}_callable_status_filtered.bed
+
+# Restrict mutation burden calculation to coding sequences
+Rscript $PURECN/FilterCallableLoci.R \
+   --genome hg38 \
+   --infile $OUT/${SAMPLEID}_callable_status_filtered.bed \
+   --outfile $OUT/${SAMPLEID}_callable_status_filtered_cds.bed
+```
+
+```{bash}
+# Restrict mutation burden calculation to coding sequences
+Rscript $PURECN/Dx.R \
+   --out $OUT/$SAMPLEID/${SAMPLEID} \
+   --rds $OUT/$SAMPLEID/${SAMPLEID}.rds \
+   --callable $OUT/${SAMPLEID}_callable_status_filtered_cds.bed \
+   --exclude hg38_simpleRepeats.bed \
+   --signatures
+```
+
+# Benchmark.R
+Summarize the germline vs somatic classification accuracy and the AUC of the posterior probability
+```{bash}
+Rscript $PURECN/BenchmarkTumorOnly.R \
+   --out $OUT/$SAMPLEID/${SAMPLEID} \
+   --rds $OUT/$SAMPLEID/${SAMPLEID}.rds \
+   --vcf $OUT/${SAMPLEID}_matching_mutect.vcf
+```
+
