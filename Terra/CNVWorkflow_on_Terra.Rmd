@@ -1,0 +1,60 @@
+---
+title: "CNVWorkflow on Terra"
+author: "Sehyun Oh"
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_depth: 3
+vignette: >
+  % \VignetteIndexEntry{}
+  % \VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# What is Terra?
+Terra is a cloud-native platform for biomedical researchers to access data, run analysis tools, and collaborate. Terra powers important scientific projects like FireCloud, AnVIL, and DataSTAGE.
+
+<br>
+
+In this vignette, we will walk through `Tumor_Only_CNV` workspace on Terra. 
+
+# Terra Workspace
+```{r out.width="250px", out.height="600px", echo=FALSE}
+knitr::include_graphics("figures/Workspace.png")
+```
+
+# Workspace Dashboard
+![](figures/Dashboard.png)
+
+# Workspace Data
+![](figures/Data.png)
+
+# Workspace Notebooks
+![](figures/Notebooks.png)
+
+# Workspace Workflows
+![](figures/Workflows.png)
+
+# Running a workflow
+## Workflow inputs
+![](figures/Workflow_Inputs.png)
+
+## Job History
+_**Job History after submission**_   
+![](figures/Job_History_Running.png)
+
+<br>
+
+_**Job History after finish**_   
+![](figures/Job_History_Done.png)
+
+<br>
+
+_**Job History in detail **_   
+![](figures/Job_History_Detail.png)
+
+
